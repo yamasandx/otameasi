@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ジャンプゲーム</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #87CEEB;
+    touch-action: none;            /* スクロール・ズーム防止 */
+    user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+let W, H, groundY, S; // S = 画面サイズに応じた拡大率
+
+// ===== 画面サイズ調整 =====
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  S = Math.min(W, H) / 400;
+  groundY = H * 0.75;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ===== ゲーム変数 =====
+let state = 'ready';   // ready / playing / over
+let player, obstacles, clouds, speed, score, dist, nextGap, overTime;
+let best = 0;
+try { best = Number(localStorage.getItem('jumpBest')) || 0; } catch (e) {}
+
+const GRAVITY = 2500;  // 重力
+const JUMP_V  = 900;   // ジャンプ力
+
+function init() {
+  player = { x: W * 0.15, y: 0, vy: 0, size: 40 * S, onGround: true };
+  obstacles = [];
+  speed = 300 * S;
+  score = 0;
+  dist = 0;
+  nextGap = 300 * S;
+  clouds = [];
+  for (let i = 0; i < 4; i++) {
+    clouds.push({ x: Math.random() * W, y: Math.random() * H * 0.4, s: (0.6 + Math.random()) * S });
+  }
+}
+init();
+
+// ===== 入力（タッチ・クリック・スペースキー） =====
+function onTap() {
+  if (state === 'ready') {
+    state = 'playing';
+    jump();
+  } else if (state === 'playing') {
+    jump();
+  } else if (state === 'over') {
+    if (performance.now() - overTime > 600) { // 誤タップ防止
+      init();
+      state = 'playing';
+    }
+  }
+}
+function jump() {
+  if (player.onGround) {
+    player.vy = JUMP_V * S;
+    player.onGround = false;
+  }
+}
+canvas.addEventListener('touchstart', e => { e.preventDefault(); onTap(); }, { passive: false });
+canvas.addEventListener('mousedown', onTap);
+window.addEventListener('keydown', e => { if (e.code === 'Space') onTap(); });
+
+// ===== 障害物生成 =====
+function spawnObstacle() {
+  const w = (20 + Math.random() * 20) * S;
+  const h = (30 + Math.random() * 45) * S;
+  obstacles.push({ x: W + 10, w, h });
+}
+
+// ===== 更新処理 =====
+function update(dt) {
+  // 雲は常に動かす
+  clouds.forEach(c => {
+    c.x -= (state === 'playing' ? speed : 60 * S) * 0.2 * dt;
+    if (c.x < -100 * S) { c.x = W + 50 * S; c.y = Math.random() * H * 0.4; }
+  });
+
+  if (state !== 'playing') return;
+
+  // スピードを徐々に上げる
+  speed = Math.min(speed + 8 * S * dt, 700 * S);
+  score += dt * 10;
+
+  // プレイヤー
+  player.vy -= GRAVITY * S * dt;
+  player.y += player.vy * dt;
+  if (player.y <= 0) {
+    player.y = 0; player.vy = 0; player.onGround = true;
+  }
+
+  // 障害物
+  dist += speed * dt;
+  if (dist >= nextGap) {
+    spawnObstacle();
+    dist = 0;
+    nextGap = (250 + Math.random() * 300) * S + speed * 0.3;
+  }
+  obstacles.forEach(o => o.x -= speed * dt);
+  obstacles = obstacles.filter(o => o.x + o.w > 0);
+
+  // 当たり判定（少し甘めにする）
+  const m = 5 * S;
+  const px = player.x + m;
+  const py = groundY - player.y - player.size + m;
+  const ps = player.size - m * 2;
+  for (const o of obstacles) {
+    const ox = o.x, oy = groundY - o.h;
+    if (px < ox + o.w && px + ps > ox && py < oy + o.h && py + ps > oy) {
+      gameOver();
+      break;
+    }
+  }
+}
+
+function gameOver() {
+  state = 'over';
+  overTime = performance.now();
+  if (navigator.vibrate) navigator.vibrate(150);
+  const s = Math.floor(score);
+  if (s > best) {
+    best = s;
+    try { localStorage.setItem('jumpBest', best); } catch (e) {}
+  }
+}
+
+// ===== 描画 =====
+function drawCloud(c) {
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, 20 * c.s, 0, Math.PI * 2);
+  ctx.arc(c.x + 25 * c.s, c.y - 10 * c.s, 25 * c.s, 0, Math.PI * 2);
+  ctx.arc(c.x + 50 * c.s, c.y, 20 * c.s, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function draw() {
+  // 空
+  const g = ctx.createLinearGradient(0, 0, 0, groundY);
+  g.addColorStop(0, '#4FA3E0');
+  g.addColorStop(1, '#BDE6FF');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, groundY);
+
+  clouds.forEach(drawCloud);
+
+  // 地面
+  ctx.fillStyle = '#7CC242';
+  ctx.fillRect(0, groundY, W, 12 * S);
+  ctx.fillStyle = '#A0522D';
+  ctx.fillRect(0, groundY + 12 * S, W, H - groundY);
+
+  // 障害物
+  obstacles.forEach(o => {
+    ctx.fillStyle = '#2E8B57';
+    ctx.fillRect(o.x, groundY - o.h, o.w, o.h);
+    ctx.fillStyle = '#1F6B40';
+    ctx.fillRect(o.x, groundY - o.h, o.w, 6 * S);
+  });
+
+  // プレイヤー
+  const px = player.x;
+  const py = groundY - player.y - player.size;
+  const s = player.size;
+  ctx.fillStyle = '#FF6B35';
+  ctx.fillRect(px, py, s, s);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(px + s * 0.55, py + s * 0.2, s * 0.25, s * 0.25);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(px + s * 0.65, py + s * 0.27, s * 0.12, s * 0.12);
+
+  // スコア
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.lineWidth = 4;
+  ctx.textAlign = 'right';
+  ctx.font = `bold ${22 * S}px sans-serif`;
+  const t1 = 'SCORE ' + Math.floor(score);
+  const t2 = 'BEST ' + best;
+  ctx.strokeText(t1, W - 15, 35 * S); ctx.fillText(t1, W - 15, 35 * S);
+  ctx.strokeText(t2, W - 15, 62 * S); ctx.fillText(t2, W - 15, 62 * S);
+
+  // メッセージ
+  ctx.textAlign = 'center';
+  if (state === 'ready') {
+    centerText('ジャンプゲーム', 40, -40);
+    centerText('タップでスタート', 22, 15);
+  } else if (state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(0, 0, W, H);
+    centerText('GAME OVER', 44, -50);
+    centerText('SCORE ' + Math.floor(score), 26, 5);
+    centerText('タップでリトライ', 22, 50);
+  }
+}
+
+function centerText(text, size, offsetY) {
+  ctx.font = `bold ${size * S}px sans-serif`;
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 5;
+  const y = H * 0.4 + offsetY * S;
+  ctx.strokeText(text, W / 2, y);
+  ctx.fillText(text, W / 2, y);
+}
+
+// ===== メインループ =====
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
